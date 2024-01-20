@@ -1,0 +1,10 @@
+data_root: "isdf-data"
+data_type: "ntfields"
+near: 0.1
+far: 100.0
+vol_bounds: [-5, 5.0, -5, 5, -5, 5.0]
+voxel_size: 0.05
+n_pyramids: 3
+n_iters: [6, 3, 3]
+dampings: [1.0e-4, 1.0e-4, 1.0e-2]
+n_steps: 192

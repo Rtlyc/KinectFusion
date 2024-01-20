@@ -6,7 +6,7 @@ import cv2
 import trimesh
 from matplotlib import pyplot as plt
 from fusion import TSDFVolumeTorch
-from dataset.tum_rgbd import TUMDataset, TUMDatasetOnline
+from dataset.tum_rgbd import TUMDataset, TUMDatasetOnline, NTFieldsDataset
 from tracker import ICPTracker
 from utils import load_config, get_volume_setting, get_time
 
@@ -20,11 +20,12 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # device = torch.device("cpu")
-    dataset = TUMDataset(os.path.join(args.data_root), device, near=args.near, far=args.far, img_scale=0.25)
+    # dataset = TUMDataset(os.path.join(args.data_root), device, near=args.near, far=args.far, img_scale=0.25)
+    dataset = NTFieldsDataset(os.path.join(args.data_root), device, near=args.near, far=args.far, img_scale=1)
     H, W = dataset.H, dataset.W
 
     vol_dims, vol_origin, voxel_size = get_volume_setting(args)
-    tsdf_volume = TSDFVolumeTorch(vol_dims, vol_origin, voxel_size, device, margin=3, fuse_color=True)
+    tsdf_volume = TSDFVolumeTorch(vol_dims, vol_origin, voxel_size, device, margin=3, fuse_color=False)
     icp_tracker = ICPTracker(args, device)
 
     t, poses, poses_gt = list(), list(), list()
@@ -40,8 +41,9 @@ if __name__ == "__main__":
         else:  # tracking
             # 1. render depth image (1) from tsdf volume
             depth1, color1, vertex01, normal1, mask1 = tsdf_volume.render_model(curr_pose, K, H, W, near=args.near, far=args.far, n_samples=args.n_steps)
-            T10 = icp_tracker(depth0, depth1, K)  # transform from 0 to 1
-            curr_pose = curr_pose @ T10
+            # T10 = icp_tracker(depth0, depth1, K)  # transform from 0 to 1
+            # curr_pose = curr_pose @ T10
+            curr_pose = pose_gt
 
         # fusion
         tsdf_volume.integrate(depth0,
@@ -75,8 +77,8 @@ if __name__ == "__main__":
         if not os.path.exists(args.save_dir):
             os.makedirs(args.save_dir)
 
-        verts, faces, norms, colors = tsdf_volume.get_mesh()
-        partial_tsdf = trimesh.Trimesh(vertices=verts, faces=faces, vertex_normals=norms, vertex_colors=colors)
+        verts, faces, norms = tsdf_volume.get_mesh()
+        partial_tsdf = trimesh.Trimesh(vertices=verts, faces=faces, vertex_normals=norms)
         partial_tsdf.export(os.path.join(args.save_dir, "mesh.ply"))
         np.savez(os.path.join(args.save_dir, "traj.npz"), poses=poses)
         np.savez(os.path.join(args.save_dir, "traj_gt.npz"), poses=poses_gt)

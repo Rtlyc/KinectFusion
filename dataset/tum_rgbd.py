@@ -205,3 +205,91 @@ class TUMDatasetOnline(torch.utils.data.Dataset):
 
         return rgb, depth, c2w, K
 
+class NTFieldsDataset(torch.utils.data.Dataset):
+    """
+    TUM dataset loader, pre-load images in advance
+    """
+
+    def __init__(
+            self,
+            rootdir,
+            device,
+            near: float = 0.2,
+            far: float = 5.,
+            img_scale: float = 1.,  # image scale factor
+            start: int = -1,
+            end: int = -1,
+    ):
+        super().__init__()
+        assert path.isdir(rootdir), f"'{rootdir}' is not a directory"
+        self.device = device
+        self.c2w_all = []
+        self.K_all = []
+        self.rgb_all = []
+        self.depth_all = []
+
+        # root should be tum_sequence
+        data_path = rootdir
+        cam_file = path.join(data_path, "traj.txt")
+        print("LOAD DATA", data_path)
+
+        # world_mats, normalize_mat
+        poses = np.loadtxt(cam_file).reshape(-1, 4, 4)
+
+        d_min = []
+        d_max = []
+        # TUM saves camera poses in OpenCV convention
+        for i, pose in enumerate(tqdm(poses)):
+            # ignore all the frames betfore
+            if start > 0 and i < start:
+                continue
+            # ignore all the frames after
+            if 0 < end < i:
+                break
+
+            intrinsics = [[339.99999762,   0.,         600.        ],
+                        [  0.,         340.,         340.        ],
+                        [  0.,           0.,           1.        ]]
+            intrinsics = np.array(intrinsics)
+                            
+            c2w = pose
+            c2w = torch.tensor(c2w, dtype=torch.float32)
+            # read images
+            rgb = np.array(imageio.imread(path.join(data_path, "frame{:06d}.png".format(i)))).astype(np.float32)
+            # depth = np.array(imageio.imread(path.join(data_path, "depth{:06d}.png".format(i)))).astype(np.float32)
+            depth = np.load(path.join(data_path, "depth{:06d}.npy".format(i))).astype(np.float32)
+            # depth /= 5000.  # TODO: put depth factor to args
+            d_max += [depth.max()]
+            d_min += [depth.min()]
+            # depth = cv2.bilateralFilter(depth, 5, 0.2, 15)
+            # print(depth[depth > 0.].min())
+            invalid = (depth < near) | (depth > far)
+            depth[invalid] = -1.
+            # downscale the image size if needed
+            if img_scale < 1.0:
+                full_size = list(rgb.shape[:2])
+                rsz_h, rsz_w = [round(hw * img_scale) for hw in full_size]
+                # TODO: figure out which way is better: skimage.rescale or cv2.resize
+                rgb = cv2.resize(rgb, (rsz_w, rsz_h), interpolation=cv2.INTER_AREA)
+                depth = cv2.resize(depth, (rsz_w, rsz_h), interpolation=cv2.INTER_NEAREST)
+                intrinsics[0, 0] *= img_scale
+                intrinsics[1, 1] *= img_scale
+                intrinsics[0, 2] *= img_scale
+                intrinsics[1, 2] *= img_scale
+
+            self.c2w_all.append(c2w)
+            self.K_all.append(torch.from_numpy(intrinsics[:3, :3]))
+            self.rgb_all.append(torch.from_numpy(rgb))
+            self.depth_all.append(torch.from_numpy(depth))
+        print("Depth min: {:f}".format(np.array(d_min).min()))
+        print("Depth max: {:f}".format(np.array(d_max).max()))
+        self.n_images = len(self.rgb_all)
+        self.H, self.W, = self.rgb_all[0].shape
+
+    def __len__(self):
+        return self.n_images
+
+    def __getitem__(self, idx):
+        return self.rgb_all[idx].to(self.device), self.depth_all[idx].to(self.device), \
+               self.c2w_all[idx].to(self.device), self.K_all[idx].to(self.device)
+
